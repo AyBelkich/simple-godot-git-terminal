@@ -2,7 +2,7 @@
 extends EditorPlugin
 
 var dock: VBoxContainer
-var output: TextEdit
+var output: RichTextLabel
 var input: LineEdit
 var commit_message_input: LineEdit
 var branch_label: Label
@@ -39,9 +39,9 @@ func _enter_tree() -> void:
 	branch_label.text = "Branch: ?"
 	toolbar.add_child(branch_label)
 
-	output = TextEdit.new()
-	output.editable = false
+	output = RichTextLabel.new()
 	output.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	output.scroll_following = true
 	dock.add_child(output)
 
 	var commit_row := HBoxContainer.new()
@@ -148,7 +148,7 @@ func commit_changes() -> void:
 		return
 
 	run_git_command("git add .")
-	run_git_command_with_args("git", ["commit", "-m", message])
+	run_git_command_with_args("git", PackedStringArray(["commit", "-m", message]))
 	commit_message_input.clear()
 	update_branch_label()
 
@@ -175,7 +175,7 @@ func run_git_command(command: String) -> void:
 		return
 
 	add_to_history(command)
-	append_output("\n> " + command + "\n")
+	append_command("\n> " + command + "\n")
 
 	var parts := command.split(" ", false)
 
@@ -195,9 +195,18 @@ func run_git_command_with_args(program: String, args: PackedStringArray) -> int:
 	var exit_code := OS.execute(program, args, result, true)
 
 	for line in result:
-		append_output(str(line) + "\n")
+		var text := str(line)
 
-	append_output("\n[Exit Code: %d]\n" % exit_code)
+		if "error" in text.to_lower():
+			append_error(text + "\n")
+		else:
+			append_output(text + "\n")
+
+	if exit_code == 0:
+		append_success("\n[Success]\n")
+	else:
+		append_error("\n[Exit Code: %d]\n" % exit_code)
+	
 	return exit_code
 
 
@@ -210,5 +219,20 @@ func add_to_history(command: String) -> void:
 
 
 func append_output(text: String) -> void:
-	output.text += text
-	output.scroll_vertical = output.get_line_count()
+	output.append_text(text)
+
+
+func append_command(text: String) -> void:
+	output.append_text("[color=skyblue]" + text + "[/color]")
+
+
+func append_success(text: String) -> void:
+	output.append_text("[color=lightgreen]" + text + "[/color]")
+
+
+func append_error(text: String) -> void:
+	output.append_text("[color=tomato]" + text + "[/color]")
+
+
+func append_info(text: String) -> void:
+	output.append_text("[color=lightgray]" + text + "[/color]")
