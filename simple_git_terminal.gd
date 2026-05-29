@@ -8,21 +8,31 @@ var input: LineEdit
 func _enter_tree() -> void:
 	dock = VBoxContainer.new()
 	dock.name = "Git Terminal"
+	dock.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	output = TextEdit.new()
 	output.editable = false
-	output.custom_minimum_size = Vector2(0, 220)
+	output.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	dock.add_child(output)
+
+	var row := HBoxContainer.new()
+	dock.add_child(row)
 
 	input = LineEdit.new()
 	input.placeholder_text = "git status"
-	dock.add_child(input)
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(input)
+
+	var clear_button := Button.new()
+	clear_button.text = "Clear"
+	row.add_child(clear_button)
 
 	input.text_submitted.connect(_on_command_submitted)
+	clear_button.pressed.connect(_on_clear_pressed)
 
 	add_control_to_bottom_panel(dock, "Git Terminal")
 
-	output.text = "Simple Git Terminal ready.\n"
+	append_output("Simple Git Terminal ready.\n")
 
 
 func _exit_tree() -> void:
@@ -30,26 +40,39 @@ func _exit_tree() -> void:
 	dock.queue_free()
 
 
+func _on_clear_pressed() -> void:
+	output.clear()
+
+
 func _on_command_submitted(command: String) -> void:
 	command = command.strip_edges()
-	if command == "":
+
+	if command.is_empty():
 		return
 
+	append_output("\n> " + command + "\n")
 	input.clear()
-	output.text += "\n> " + command + "\n"
 
 	var parts := command.split(" ", false)
 
-	if parts[0] != "git":
-		output.text += "Only git commands are allowed for now.\n"
+	if parts.is_empty():
 		return
 
-	var args := parts.slice(1)
-	var result: Array = []
+	if parts[0] != "git":
+		append_output("Only git commands are allowed.\n")
+		return
 
+	var args := PackedStringArray(parts.slice(1))
+
+	var result := []
 	var exit_code := OS.execute("git", args, result, true)
 
 	for line in result:
-		output.text += str(line) + "\n"
+		append_output(str(line) + "\n")
 
-	output.text += "\n[exit code: %s]\n" % exit_code
+	append_output("\n[Exit Code: %d]\n" % exit_code)
+
+
+func append_output(text: String) -> void:
+	output.text += text
+	output.scroll_vertical = output.get_line_count()
