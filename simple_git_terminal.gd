@@ -64,7 +64,7 @@ func _enter_tree() -> void:
 	dock.add_child(command_row)
 
 	input = LineEdit.new()
-	input.placeholder_text = "Type any git command"
+	input.placeholder_text = "git status OR git add . && git commit -m \"message\" && git push"
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	command_row.add_child(input)
 
@@ -72,9 +72,9 @@ func _enter_tree() -> void:
 	clear_button.text = "Clear"
 	command_row.add_child(clear_button)
 
-	status_button.pressed.connect(func(): run_git_command("git status"))
-	pull_button.pressed.connect(func(): run_git_command("git pull"))
-	push_button.pressed.connect(func(): run_git_command("git push"))
+	status_button.pressed.connect(func(): run_command_line("git status"))
+	pull_button.pressed.connect(func(): run_command_line("git pull"))
+	push_button.pressed.connect(func(): run_command_line("git push"))
 	refresh_branch_button.pressed.connect(update_branch_label)
 
 	commit_button.pressed.connect(commit_changes)
@@ -86,7 +86,7 @@ func _enter_tree() -> void:
 
 	add_control_to_bottom_panel(dock, "Git Terminal")
 
-	append_output("Simple Git Terminal ready.\n")
+	append_info("Simple Git Terminal ready.\n")
 	update_branch_label()
 
 
@@ -97,7 +97,7 @@ func _exit_tree() -> void:
 
 func _on_command_submitted(command: String) -> void:
 	input.clear()
-	run_git_command(command)
+	run_command_line(command)
 
 
 func _on_input_gui_input(event: InputEvent) -> void:
@@ -140,22 +140,30 @@ func show_next_command() -> void:
 	input.caret_column = input.text.length()
 
 
-func commit_changes() -> void:
+func commit_changes() -> int:
 	var message := commit_message_input.text.strip_edges()
 
 	if message.is_empty():
-		append_output("\nCommit message cannot be empty.\n")
-		return
+		append_error("\nCommit message cannot be empty.\n")
+		return 1
 
-	run_git_command("git add .")
-	run_git_command_with_args("git", PackedStringArray(["commit", "-m", message]))
-	commit_message_input.clear()
+	var add_exit := run_git_args(["add", "."])
+	if add_exit != 0:
+		return add_exit
+
+	var commit_exit := run_git_args(["commit", "-m", message])
+	if commit_exit == 0:
+		commit_message_input.clear()
+
 	update_branch_label()
+	return commit_exit
 
 
 func commit_and_push() -> void:
-	commit_changes()
-	run_git_command("git push")
+	var commit_exit := commit_changes()
+
+	if commit_exit == 0:
+		run_command_line("git push")
 
 
 func update_branch_label() -> void:
@@ -168,36 +176,55 @@ func update_branch_label() -> void:
 		branch_label.text = "Branch: ?"
 
 
-func run_git_command(command: String) -> void:
+func run_command_line(command_line: String) -> void:
+	command_line = command_line.strip_edges()
+
+	if command_line.is_empty():
+		return
+
+	add_to_history(command_line)
+
+	var commands := split_command_line(command_line)
+
+	for command in commands:
+		var exit_code := run_single_command(command)
+
+		if exit_code != 0:
+			append_error("\nStopped because previous command failed.\n")
+			break
+
+	update_branch_label()
+
+
+func run_single_command(command: String) -> int:
 	command = command.strip_edges()
 
 	if command.is_empty():
-		return
+		return 0
 
-	add_to_history(command)
 	append_command("\n> " + command + "\n")
 
-	var parts := command.split(" ", false)
+	var parts := parse_command_args(command)
 
 	if parts.is_empty():
-		return
+		return 0
 
 	if parts[0] != "git":
-		append_output("Only git commands are allowed.\n")
-		return
+		append_error("Only git commands are allowed.\n")
+		return 1
 
-	var args := PackedStringArray(parts.slice(1))
-	run_git_command_with_args("git", args)
+	var git_args := PackedStringArray(parts.slice(1))
+	return run_git_args(git_args)
 
 
-func run_git_command_with_args(program: String, args: PackedStringArray) -> int:
+func run_git_args(args: PackedStringArray) -> int:
 	var result := []
-	var exit_code := OS.execute(program, args, result, true)
+	var exit_code := OS.execute("git", args, result, true)
 
 	for line in result:
 		var text := str(line)
 
-		if "error" in text.to_lower():
+		if "error" in text.to_lower() or "fatal" in text.to_lower():
 			append_error(text + "\n")
 		else:
 			append_output(text + "\n")
@@ -206,8 +233,66 @@ func run_git_command_with_args(program: String, args: PackedStringArray) -> int:
 		append_success("\n[Success]\n")
 	else:
 		append_error("\n[Exit Code: %d]\n" % exit_code)
-	
+
 	return exit_code
+
+
+func split_command_line(command_line: String) -> Array[String]:
+	var commands: Array[String] = []
+	var current := ""
+	var in_quotes := false
+	var i := 0
+
+	while i < command_line.length():
+		var c := command_line[i]
+
+		if c == "\"":
+			in_quotes = !in_quotes
+			current += c
+		elif not in_quotes and c == ";":
+			if not current.strip_edges().is_empty():
+				commands.append(current.strip_edges())
+			current = ""
+		elif not in_quotes and c == "&" and i + 1 < command_line.length() and command_line[i + 1] == "&":
+			if not current.strip_edges().is_empty():
+				commands.append(current.strip_edges())
+			current = ""
+			i += 1
+		else:
+			current += c
+
+		i += 1
+
+	if not current.strip_edges().is_empty():
+		commands.append(current.strip_edges())
+
+	return commands
+
+
+func parse_command_args(command: String) -> Array[String]:
+	var args: Array[String] = []
+	var current := ""
+	var in_quotes := false
+	var i := 0
+
+	while i < command.length():
+		var c := command[i]
+
+		if c == "\"":
+			in_quotes = !in_quotes
+		elif not in_quotes and c == " ":
+			if not current.is_empty():
+				args.append(current)
+				current = ""
+		else:
+			current += c
+
+		i += 1
+
+	if not current.is_empty():
+		args.append(current)
+
+	return args
 
 
 func add_to_history(command: String) -> void:
